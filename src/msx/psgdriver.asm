@@ -17,11 +17,20 @@ PUBLIC SOUNDDRV_STOP
 PUBLIC SOUNDDRV_PAUSE
 PUBLIC SOUNDDRV_RESUME
 PUBLIC SOUNDDRV_STATE
+PUBLIC _SOUNDDRV_INIT
+PUBLIC _SOUNDDRV_EXEC
+PUBLIC _SOUNDDRV_BGMPLAY
+PUBLIC _SOUNDDRV_SFXPLAY
+PUBLIC _SOUNDDRV_STOP
+PUBLIC _SOUNDDRV_PAUSE
+PUBLIC _SOUNDDRV_RESUME
+PUBLIC _SOUNDDRV_STATE
 
 ; ====================================================================================================
 ; DRIVER INITIALIZE
 ; ====================================================================================================
 SOUNDDRV_INIT:
+_SOUNDDRV_INIT:
     DI
     PUSH AF
     PUSH BC
@@ -95,6 +104,7 @@ SOUNDDRV_INIT_2:
 ;              トラック3のデータアドレス:2byte
 ; ====================================================================================================
 SOUNDDRV_BGMPLAY:
+_SOUNDDRV_BGMPLAY:
     DI
     PUSH AF
     PUSH BC
@@ -139,6 +149,7 @@ SOUNDDRV_BGMPLAY:
 ;              トラック3のデータアドレス:2byte ゼロ=なし
 ; ====================================================================================================
 SOUNDDRV_SFXPLAY:
+_SOUNDDRV_SFXPLAY:
     DI
     PUSH AF
     PUSH BC
@@ -230,11 +241,49 @@ SOUNDDRV_INITWK_L1:
 
     RET
 
+; ====================================================================================================
+; _SOUNDDRV_REGENVELOPE
+; IN  : A = エンベロープID
+;       HL = エンベロープデータの先頭アドレス
+;            エンベロープデータの構成は以下とする
+;              エンベロープのデータアドレス:2byte
+; ====================================================================================================
+_SOUNDDRV_REGENVELOPE:
+    DI
+    PUSH AF
+    PUSH BC
+    PUSH DE
+    PUSH HL
+    PUSH IX
+    PUSH IY
+
+    PUSH HL							;//エンベロープデータの先頭アドレスを保存
+    LD HL, SOUNDDRV_ENVELOPEWK
+    SLA A                           ; アドレスはワードなので2倍
+    LD C, A
+    LD B, 0
+    ADD HL, BC						; HL <- 登録したいエンベロープIDのアドレス
+    POP BC							; BC <- エンベロープデータの先頭アドレス
+    
+    LD (HL), C
+    INC HL
+    LD (HL), B
+
+    POP IY
+    POP IX
+    POP HL
+    POP DE
+    POP BC
+    POP AF
+    EI
+
+    RET
 
 ; ====================================================================================================
 ; PLAY STOP
 ; ====================================================================================================
 SOUNDDRV_STOP:
+_SOUNDDRV_STOP:
     DI
     PUSH AF
     PUSH BC
@@ -290,6 +339,7 @@ SOUNDDRV_STOP_L2:
 ; PLAY PAUSE
 ; ====================================================================================================
 SOUNDDRV_PAUSE:
+_SOUNDDRV_PAUSE:
     DI
     PUSH AF
 ;    PUSH BC
@@ -320,6 +370,7 @@ SOUNDDRV_PAUSE_EXIT:
 ; PLAY RESUME
 ; ====================================================================================================
 SOUNDDRV_RESUME:
+_SOUNDDRV_RESUME:
     DI
     PUSH AF
 ;    PUSH BC
@@ -364,6 +415,7 @@ SOUNDDRV_RESUME_EXIT:
 ; DRIVER EXECUTE
 ; ====================================================================================================
 SOUNDDRV_EXEC:
+_SOUNDDRV_EXEC:
     ; ■サウンドドライバのステータス判定
     LD A,(SOUNDDRV_STATE)           ; A <- サウンドドライバの状態
     OR A
@@ -441,6 +493,9 @@ SOUNDDRV_CHEXEC_L2:
 
 SOUNDDRV_CHEXEC_L21:
     ; ■コマンドによる分岐
+    CP 96                          ; データ=96(休符)か
+    JP Z,SOUNDDRV_CHEXEC_CMD96     ; 休符設定処理へ
+
     CP 218                          ; データ=218(デチューン値)か
     JP Z,SOUNDDRV_CHEXEC_CMD218     ; デチューン値設定処理へ
 
@@ -495,6 +550,7 @@ SOUNDDRV_CHEXEC_L21:
 
 SOUNDDRV_CHEXEC_L22:
     CALL SOUNDDRV_SETPSG_TONE       ; トーン(PSGレジスタ0～5)設定
+    CALL SOUNDDRV_SETPSG_VOLUME     ; PSGレジスタ8～10設定(追加。休符が終わらなくなっちゃうので)
 
 SOUNDDRV_CHEXEC_L23:
     ; ■該当チャンネルのウェイトカウンタ設定
@@ -502,6 +558,40 @@ SOUNDDRV_CHEXEC_L23:
     LD (IX),A                       ; ワークにウェイトカウンタを設定
 
     RET
+
+; ----------------------------------------------------------------------------------------------------
+; コマンド：96（休符）設定
+; ----------------------------------------------------------------------------------------------------
+SOUNDDRV_CHEXEC_CMD96:
+
+    LD A,D                          ; A <- D(トラック番号)
+    CP 3
+    JR NC,SOUNDDRV_CHEXEC_CMD96_MUTE      ; 1(=SFX)の場合はMUTEへ
+
+    ;   BGMトラックの時の処理
+    ;   SFXトラックのワークに設定されているSFXデータの先頭アドレスを調べる
+    ;   $0000でない場合はSFX再生中なので、トーンデータは設定せず、ウェイトカウンタの設定のみ行う
+    ADD A,4                         ; SFXトラックを調べるためにトラック番号に+4する
+    CALL SOUNDDRV_GETWKADDR         ; HLに対象トラックの先頭アドレスを取得
+
+    INC HL                          ; @ToDo:トラックデータの先頭アドレスを求めることが多いので、ワークの持ち方を見直したい(毎回21ステートかかってる)
+    INC HL
+    INC HL
+
+    LD A,(HL)                       ; 対象トラックの先頭アドレス=$0000か
+    INC HL
+    OR (HL)
+    JR NZ,SOUNDDRV_CHEXEC_L23       ; ゼロでない場合はSFX再生中なのでBGMのボリュームは設定せずL23へ
+
+SOUNDDRV_CHEXEC_CMD96_MUTE:
+    LD A,D                          ; A <- D(トラック番号)
+    AND %00000011                   ; 下位2ビットをチャンネル番号とする
+    ADD A,8                         ; PSGレジスタ8?10に指定するため+8
+    LD E, 0							; ボリューム0
+;	CALL WRTPSG		                ; BIOS WRTPSG  PSGレジスタへデータを書き込み
+    CALL $0093                      ; BIOS WRTPSG  PSGレジスタへデータを書き込み
+
+	JP SOUNDDRV_CHEXEC_L23:			; 休符の長さを設定
 
 ; ----------------------------------------------------------------------------------------------------
 ; データ終端処理
@@ -888,6 +978,7 @@ SOUNDDRV_H_TIMI_BACKUP:
 ; ドライバステータス
 ; ----------------------------------------------------------------------------------------------------
 SOUNDDRV_STATE:
+_SOUNDDRV_STATE:
     DB  SOUNDDRV_STATE_STOP         ; サウンドドライバ状態初期値
 
 ; ----------------------------------------------------------------------------------------------------
@@ -912,9 +1003,9 @@ SOUNDDRV_BGMWK:
     DB  $00                         ; +8 トーン(下位)
     DB  $00                         ; +9 トーン(上位)
     DB  $00                         ; +A ノイズトーン
-    DB  $00                         ; +B 予備
-    DB  $00                         ; +C 予備
-    DB  $00                         ; +D 予備
+    DB  $00                         ; +B エンベロープカウンタ(n/60秒毎に増える)
+    DB  $00                         ; +C エンベロープデータのアドレス(下位)
+    DB  $00                         ; +D エンベロープデータのアドレス(上位)
     DB  $00                         ; +E 予備
     DB  $00                         ; +F 予備
     ; BGMトラック2(=ChB)
@@ -1015,3 +1106,12 @@ SOUNDDRV_SFXWK:
     DB  $00                         ; +E 予備
     DB  $00                         ; +F プライオリティ(0:低、255:高)
 
+; ----------------------------------------------------------------------------------------------------
+; エンベロープワークエリア
+; ----------------------------------------------------------------------------------------------------
+;//とりあえず４つくらい？
+SOUNDDRV_ENVELOPEWK:
+    DW  $0000                       ; エンベロープデータ0の先頭アドレス
+    DW  $0000                       ; エンベロープデータ1の先頭アドレス
+    DW  $0000                       ; エンベロープデータ2の先頭アドレス
+    DW  $0000                       ; エンベロープデータ3の先頭アドレス
