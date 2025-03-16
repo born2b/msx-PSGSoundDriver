@@ -834,7 +834,7 @@ SOUNDDRV_SETPSG_VOLENV:
     LD A,(HL)						; A <- 現在のエンベロープデータ
     AND %00001111					; 下位4bitは繰り返しカウント
 	CP 1
-	RET Z							; 1:終端コード（何もせず終了）
+	JP Z, SOUNDDRV_SETPSG_VOLENV_SETVOL			; 1:終端コード（何もせず終了）
 	
 	LD B,A							; B <- 繰り返しカウント
 	LD A,C							; A <- エンベロープカウンタ
@@ -842,6 +842,7 @@ SOUNDDRV_SETPSG_VOLENV:
 	INC A							; カウンタを進める(つまり3以上の数字でないと意味が無い)
     LD (IX+11), A					; エンベロープカウンタ <- A
     
+SOUNDDRV_SETPSG_VOLENV_SETVOL:
 	LD A,(HL)						; A <- 現在のエンベロープデータ
     AND %11110000					; 上位4bitはボリューム
     OR (IX+7)						; ボリューム
